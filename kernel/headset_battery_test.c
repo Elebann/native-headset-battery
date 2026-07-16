@@ -4,11 +4,54 @@
 
 #define DRIVER_NAME "headset_battery_test"
 
-static int battery_capacity = 54;
-module_param(battery_capacity, int, 0644);
-MODULE_PARM_DESC(battery_capacity, "Headset battery percentage");
-
 static struct power_supply *headset_power_supply;
+
+static int battery_capacity = 50;
+
+static int set_battery_capacity(
+    const char *value,
+    const struct kernel_param *parameter
+)
+{
+    int new_capacity;
+    int result;
+
+    result = kstrtoint(value, 10, &new_capacity);
+    if (result < 0)
+        return result;
+
+    if (new_capacity < 0 || new_capacity > 100)
+        return -EINVAL;
+
+    battery_capacity = new_capacity;
+
+    if (headset_power_supply)
+        power_supply_changed(headset_power_supply);
+
+    pr_info(
+        DRIVER_NAME ": battery capacity updated to %d%%\n",
+        battery_capacity
+    );
+
+    return 0;
+}
+
+static const struct kernel_param_ops battery_capacity_ops = {
+    .set = set_battery_capacity,
+    .get = param_get_int,
+};
+
+module_param_cb(
+    battery_capacity,
+    &battery_capacity_ops,
+    &battery_capacity,
+    0644
+);
+
+MODULE_PARM_DESC(
+    battery_capacity,
+    "Headset battery percentage"
+);
 
 static enum power_supply_property headset_properties[] = {
     POWER_SUPPLY_PROP_STATUS,
