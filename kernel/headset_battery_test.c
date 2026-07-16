@@ -1,4 +1,5 @@
 #include <linux/init.h>
+#include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/power_supply.h>
 
@@ -7,6 +8,14 @@
 static struct power_supply *headset_power_supply;
 
 static int battery_capacity = 50;
+static int battery_status = POWER_SUPPLY_STATUS_DISCHARGING;
+static int battery_online = 1;
+
+static void notify_power_supply_changed(void)
+{
+    if (headset_power_supply)
+        power_supply_changed(headset_power_supply);
+}
 
 static int set_battery_capacity(
     const char *value,
@@ -24,13 +33,72 @@ static int set_battery_capacity(
         return -EINVAL;
 
     battery_capacity = new_capacity;
-
-    if (headset_power_supply)
-        power_supply_changed(headset_power_supply);
+    notify_power_supply_changed();
 
     pr_info(
-        DRIVER_NAME ": battery capacity updated to %d%%\n",
+        DRIVER_NAME ": capacity updated to %d%%\n",
         battery_capacity
+    );
+
+    return 0;
+}
+
+static int set_battery_status(
+    const char *value,
+    const struct kernel_param *parameter
+)
+{
+    int new_status;
+    int result;
+
+    result = kstrtoint(value, 10, &new_status);
+    if (result < 0)
+        return result;
+
+    switch (new_status) {
+    case POWER_SUPPLY_STATUS_UNKNOWN:
+    case POWER_SUPPLY_STATUS_CHARGING:
+    case POWER_SUPPLY_STATUS_DISCHARGING:
+    case POWER_SUPPLY_STATUS_NOT_CHARGING:
+    case POWER_SUPPLY_STATUS_FULL:
+        break;
+
+    default:
+        return -EINVAL;
+    }
+
+    battery_status = new_status;
+    notify_power_supply_changed();
+
+    pr_info(
+        DRIVER_NAME ": status updated to %d\n",
+        battery_status
+    );
+
+    return 0;
+}
+
+static int set_battery_online(
+    const char *value,
+    const struct kernel_param *parameter
+)
+{
+    int new_online;
+    int result;
+
+    result = kstrtoint(value, 10, &new_online);
+    if (result < 0)
+        return result;
+
+    if (new_online != 0 && new_online != 1)
+        return -EINVAL;
+
+    battery_online = new_online;
+    notify_power_supply_changed();
+
+    pr_info(
+        DRIVER_NAME ": online updated to %d\n",
+        battery_online
     );
 
     return 0;
@@ -41,6 +109,16 @@ static const struct kernel_param_ops battery_capacity_ops = {
     .get = param_get_int,
 };
 
+static const struct kernel_param_ops battery_status_ops = {
+    .set = set_battery_status,
+    .get = param_get_int,
+};
+
+static const struct kernel_param_ops battery_online_ops = {
+    .set = set_battery_online,
+    .get = param_get_int,
+};
+
 module_param_cb(
     battery_capacity,
     &battery_capacity_ops,
@@ -48,10 +126,23 @@ module_param_cb(
     0644
 );
 
-MODULE_PARM_DESC(
-    battery_capacity,
-    "Headset battery percentage"
+module_param_cb(
+    battery_status,
+    &battery_status_ops,
+    &battery_status,
+    0644
 );
+
+module_param_cb(
+    battery_online,
+    &battery_online_ops,
+    &battery_online,
+    0644
+);
+
+MODULE_PARM_DESC(battery_capacity, "Headset battery percentage");
+MODULE_PARM_DESC(battery_status, "Headset power-supply status");
+MODULE_PARM_DESC(battery_online, "Whether the headset is online");
 
 static enum power_supply_property headset_properties[] = {
     POWER_SUPPLY_PROP_STATUS,
@@ -71,15 +162,15 @@ static int headset_get_property(
 {
     switch (property) {
     case POWER_SUPPLY_PROP_STATUS:
-        value->intval = POWER_SUPPLY_STATUS_DISCHARGING;
+        value->intval = battery_status;
         return 0;
 
     case POWER_SUPPLY_PROP_ONLINE:
-        value->intval = 1;
+        value->intval = battery_online;
         return 0;
 
     case POWER_SUPPLY_PROP_CAPACITY:
-        value->intval = clamp(battery_capacity, 0, 100);
+        value->intval = battery_capacity;
         return 0;
 
     case POWER_SUPPLY_PROP_SCOPE:
@@ -95,7 +186,7 @@ static int headset_get_property(
         return 0;
 
     case POWER_SUPPLY_PROP_SERIAL_NUMBER:
-        value->strval = "virtual-headset-0";
+        value->strval = "046d-0aba";
         return 0;
 
     default:
@@ -126,12 +217,12 @@ static int __init headset_battery_init(void)
             DRIVER_NAME ": failed to register power supply: %ld\n",
             PTR_ERR(headset_power_supply)
         );
+
         return PTR_ERR(headset_power_supply);
     }
 
     pr_info(
-        DRIVER_NAME ": registered virtual headset battery at %d%%\n",
-        battery_capacity
+        DRIVER_NAME ": registered virtual headset battery\n"
     );
 
     return 0;
@@ -140,7 +231,10 @@ static int __init headset_battery_init(void)
 static void __exit headset_battery_exit(void)
 {
     power_supply_unregister(headset_power_supply);
-    pr_info(DRIVER_NAME ": virtual headset battery removed\n");
+
+    pr_info(
+        DRIVER_NAME ": virtual headset battery removed\n"
+    );
 }
 
 module_init(headset_battery_init);
@@ -148,5 +242,7 @@ module_exit(headset_battery_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Evan Reyes");
-MODULE_DESCRIPTION("Proof-of-concept virtual power supply for a wireless headset");
-MODULE_VERSION("0.1");
+MODULE_DESCRIPTION(
+    "Virtual Linux power_supply for a wireless headset"
+);
+MODULE_VERSION("0.2");
